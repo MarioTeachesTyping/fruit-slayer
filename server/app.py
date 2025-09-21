@@ -47,6 +47,51 @@ def seg_circle_intersects(x1,y1,x2,y2, cx,cy,r):
     px, py = x1 + t*dx, y1 + t*dy
     return (cx - px)**2 + (cy - py)**2 <= r*r
 
+# If user moves their too fast, the detection disappears. Tries to make it a lil better.
+class TipFilter:
+    def __init__(self):
+        self.x = self.y = None
+        self.vx = self.vy = 0.0
+        self.last_t = None
+        self.last_seen = -1.0
+
+    def _alpha(self, speed):  # “One Euro-ish”: more smoothing when slow, less when fast
+        # speed in px/s; clamp between 0.2–0.85 adaptively
+        return max(0.2, min(0.85, speed / 2000.0))
+
+    def update_visible(self, x, y, t):
+        if self.last_t is None:
+            self.x, self.y = x, y
+            self.vx = self.vy = 0.0
+            self.last_t = t
+            self.last_seen = t
+            return self.x, self.y, False  # not predicted
+
+        dt = max(1e-3, t - self.last_t)
+        # instantaneous velocity
+        inst_vx = (x - self.x) / dt
+        inst_vy = (y - self.y) / dt
+        speed = (inst_vx**2 + inst_vy**2) ** 0.5
+        a = self._alpha(speed)
+        # EMA smoothing on pos; keep velocity blended
+        self.x = (1 - a) * self.x + a * x
+        self.y = (1 - a) * self.y + a * y
+        self.vx = 0.6 * self.vx + 0.4 * inst_vx
+        self.vy = 0.6 * self.vy + 0.4 * inst_vy
+        self.last_t = t
+        self.last_seen = t
+        return self.x, self.y, False
+
+    def predict_if_missing(self, t, horizon=0.12):
+        # If we lost the point recently, predict forward with constant velocity
+        if self.last_seen < 0 or (t - self.last_seen) > horizon:
+            return None  # too long; treat as missing
+        dt = t - self.last_t if self.last_t else 0.0
+        self.x = self.x + self.vx * dt
+        self.y = self.y + self.vy * dt
+        self.last_t = t
+        return self.x, self.y, True  # predicted
+
 def main():
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
@@ -129,7 +174,7 @@ def main():
         cv2.putText(frame, "Press 'q' to quit", (16, H-16),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 1)
 
-        cv2.imshow("Fruit Slayer (backend prototype)", frame)
+        cv2.imshow("Fruit Slayer (Backend)", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
