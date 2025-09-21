@@ -20,23 +20,28 @@ hands = mp_hands.Hands(static_image_mode=False,
                        min_tracking_confidence=0.5)
 
 class Fruit:
-    __slots__ = ("x","y","vx","vy","alive","born","color")
+    __slots__ = ("x","y","vx","vy","alive","born","color","is_bomb")
     COLORS = [
-        (0,0,255),     # Red (BGR in OpenCV)
-        (0,165,255),   # Orange
-        (0,255,255),   # Yellow
-        (0,255,0),     # Green
-        (255,0,0),     # Blue
-        (255,0,255)    # Purple
+        (0,0,255),       # Red
+        (0,165,255),     # Orange
+        (0,255,255),     # Yellow
+        (0,255,0),       # Green
+        (255,0,0),       # Blue
+        (255,0,255),     # Purple
+        (42,42,165)      # Light Brown
     ]
-    def __init__(self, now):
+    BOMB_COLOR = (0,0,0)  # Black (BGR)
+
+    def __init__(self, now, bomb_prob=0.12):  # ~12% bombs (feel free to tweak)
         self.x = random.randint(int(0.15*W), int(0.85*W))
         self.y = H + FRUIT_RADIUS + 5
         self.vx = random.uniform(-220, 220)
-        self.vy = -random.uniform(700, 1300)  # your new range
+        self.vy = -random.uniform(700, 1300)
         self.alive = True
         self.born = now
-        self.color = random.choice(Fruit.COLORS)  # assign random color
+        self.is_bomb = (random.random() < bomb_prob)
+        self.color = Fruit.BOMB_COLOR if self.is_bomb else random.choice(Fruit.COLORS)
+
     def update(self, dt):
         if not self.alive: return
         self.vy += GRAVITY * dt
@@ -44,7 +49,6 @@ class Fruit:
         self.y += self.vy * dt
         if self.y - FRUIT_RADIUS > H + 80:
             self.alive = False
-
 
 def seg_circle_intersects(x1,y1,x2,y2, cx,cy,r):
     # Segment-circle intersection (closest distance <= r and projection within segment)
@@ -159,23 +163,41 @@ def main():
             # draw fingertip
             cv2.circle(frame, (x, y), 7, (255, 255, 255), -1)
 
-        # check collisions if slicing
+        bomb_flash_until = 0.0 # will flash red screen if you hit a bomb
+
         if slice_segment:
             x1,y1,x2,y2 = slice_segment
             cv2.line(frame, (x1,y1), (x2,y2), (255,255,255), 2)
             for f in fruits:
                 if f.alive and seg_circle_intersects(x1,y1,x2,y2, int(f.x), int(f.y), FRUIT_RADIUS):
                     f.alive = False
-                    score += 1
+                    if getattr(f, "is_bomb", False):
+                        score = max(0, score - 2)        # simple penalty; tweak as you like
+                        bomb_flash_until = now + 0.20     # 200 ms red flash
+                    else:
+                        score += 1
 
         # draw fruits
         for f in fruits:
             if not f.alive: continue
-            cv2.circle(frame, (int(f.x), int(f.y)), FRUIT_RADIUS, f.color, -1)  # filled circle
-            cv2.circle(frame, (int(f.x), int(f.y)), FRUIT_RADIUS, (255,255,255), 2)  # white outline
+            center = (int(f.x), int(f.y))
+            if getattr(f, "is_bomb", False):
+                cv2.circle(frame, center, FRUIT_RADIUS, (0,0,0), -1)         # black fill
+                cv2.circle(frame, center, FRUIT_RADIUS, (0,0,255), 2)        # red outline
+                # Optional: small "fuse" dot
+                cv2.circle(frame, (center[0], center[1]-8), 4, (0,0,255), -1)
+            else:
+                cv2.circle(frame, center, FRUIT_RADIUS, f.color, -1)         # fruit fill
+                cv2.circle(frame, center, FRUIT_RADIUS, (255,255,255), 2)    # white outline
 
         # clean up dead fruits occasionally
         fruits = [f for f in fruits if f.alive or (now - f.born) < 8.0]
+
+        if now < bomb_flash_until:
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (0,0), (W,H), (0,0,255), -1)  # red tint
+            alpha = 0.25
+            frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
         # HUD
         cv2.putText(frame, f"Score: {score}", (16, 36),
