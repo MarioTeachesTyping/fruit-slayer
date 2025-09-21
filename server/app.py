@@ -20,22 +20,31 @@ hands = mp_hands.Hands(static_image_mode=False,
                        min_tracking_confidence=0.5)
 
 class Fruit:
-    __slots__ = ("x","y","vx","vy","alive","born")
+    __slots__ = ("x","y","vx","vy","alive","born","color")
+    COLORS = [
+        (0,0,255),     # Red (BGR in OpenCV)
+        (0,165,255),   # Orange
+        (0,255,255),   # Yellow
+        (0,255,0),     # Green
+        (255,0,0),     # Blue
+        (255,0,255)    # Purple
+    ]
     def __init__(self, now):
         self.x = random.randint(int(0.15*W), int(0.85*W))
         self.y = H + FRUIT_RADIUS + 5
         self.vx = random.uniform(-220, 220)
-        self.vy = -random.uniform(700, 1000)  # toss upward
+        self.vy = -random.uniform(700, 1300)  # your new range
         self.alive = True
         self.born = now
+        self.color = random.choice(Fruit.COLORS)  # assign random color
     def update(self, dt):
         if not self.alive: return
         self.vy += GRAVITY * dt
         self.x += self.vx * dt
         self.y += self.vy * dt
-        # simple bounds
         if self.y - FRUIT_RADIUS > H + 80:
             self.alive = False
+
 
 def seg_circle_intersects(x1,y1,x2,y2, cx,cy,r):
     # Segment-circle intersection (closest distance <= r and projection within segment)
@@ -162,8 +171,8 @@ def main():
         # draw fruits
         for f in fruits:
             if not f.alive: continue
-            cv2.circle(frame, (int(f.x), int(f.y)), FRUIT_RADIUS, (0, 255, 0), 2)
-            cv2.circle(frame, (int(f.x), int(f.y)), FRUIT_RADIUS-4, (0, 128, 0), -1)
+            cv2.circle(frame, (int(f.x), int(f.y)), FRUIT_RADIUS, f.color, -1)  # filled circle
+            cv2.circle(frame, (int(f.x), int(f.y)), FRUIT_RADIUS, (255,255,255), 2)  # white outline
 
         # clean up dead fruits occasionally
         fruits = [f for f in fruits if f.alive or (now - f.born) < 8.0]
