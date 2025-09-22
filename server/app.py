@@ -2,9 +2,11 @@
 # run this file for backend #
 # ========================= #
 
+import os
 import cv2
 import mediapipe as mp
 import time, random, math
+import numpy as np
 
 W, H = 960, 540
 GRAVITY = 1200.0  # px/s^2
@@ -13,34 +15,107 @@ SLICE_SPEED_THRESH = 1400.0  # px/s (tweak)
 FRUIT_RADIUS = 28
 MAX_FRUITS = 6
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+ASSET_DIR = os.path.join(HERE, "assets")
+
+def load_png(name):
+    """Load a PNG with alpha, raise clear error if missing, and ensure 4 channels."""
+    path = os.path.join(ASSET_DIR, name)
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)  # keep alpha channel
+    if img is None:
+        raise FileNotFoundError(
+            f"Asset not found or unreadable: {path}\n"
+            f"Working dir: {os.getcwd()}\n"
+            f"Tip: ensure the file exists and the path is correct."
+        )
+    # If the image has only 3 channels, add an opaque alpha channel
+    if img.ndim == 3 and img.shape[2] == 3:
+        alpha = 255 * np.ones((img.shape[0], img.shape[1], 1), dtype=img.dtype)
+        img = np.concatenate([img, alpha], axis=2)
+    return img
+
+# Load them in beforehand
+fruit_imgs = {
+    "red":    load_png("strawberry.png"),
+    "orange": load_png("mango.png"),
+    "yellow": load_png("pineapple.png"),
+    "green":  load_png("watermelon.png"),
+    "blue":   load_png("score_2x_banana.png"),
+    "purple": load_png("plum.png"),
+    "brown":  load_png("coconut.png"),
+    "bomb":   load_png("bomb.png"),
+}
+
+hud_icon = load_png("watermelon.png")
+
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(static_image_mode=False,
                        max_num_hands=1,
                        min_detection_confidence=0.5,
                        min_tracking_confidence=0.5)
 
-class Fruit:
-    __slots__ = ("x","y","vx","vy","alive","born","color","is_bomb")
-    COLORS = [
-        (0,0,255),       # Red
-        (0,165,255),     # Orange
-        (0,255,255),     # Yellow
-        (0,255,0),       # Green
-        (255,0,0),       # Blue
-        (255,0,255),     # Purple
-        (42,42,165)      # Light Brown
-    ]
-    BOMB_COLOR = (0,0,0)  # Black (BGR)
+def overlay_img(bg, fg, x, y):
+    """
+    Alpha-blend fg (with 4 channels) onto bg (3 channels), centered at (x,y).
+    Handles all edge cases where the sprite is partially or fully off-screen.
+    """
+    fh, fw = fg.shape[:2]
+    H, W = bg.shape[:2]
 
-    def __init__(self, now, bomb_prob=0.12):  # ~12% bombs (feel free to tweak)
+    # top-left of where we'd like to place the sprite
+    x1 = int(round(x - fw / 2))
+    y1 = int(round(y - fh / 2))
+    x2 = x1 + fw
+    y2 = y1 + fh
+
+    # compute intersection with the background bounds
+    bx1 = max(0, x1)
+    by1 = max(0, y1)
+    bx2 = min(W, x2)
+    by2 = min(H, y2)
+
+    # if completely off-screen, nothing to do
+    if bx1 >= bx2 or by1 >= by2:
+        return bg
+
+    # corresponding crop on the foreground
+    fx1 = bx1 - x1
+    fy1 = by1 - y1
+    fx2 = fx1 + (bx2 - bx1)
+    fy2 = fy1 + (by2 - by1)
+
+    fg_crop = fg[fy1:fy2, fx1:fx2]
+    bg_roi  = bg[by1:by2, bx1:bx2]
+
+    # ensure we actually have overlap
+    if fg_crop.size == 0 or bg_roi.size == 0:
+        return bg
+
+    # alpha blend (assumes fg has 4 channels)
+    alpha = fg_crop[:, :, 3] / 255.0
+    # expand alpha to 3 channels to match BGR
+    if alpha.ndim == 2:
+        alpha = alpha[:, :, None]
+
+    # blend into the ROI in-place
+    bg[by1:by2, bx1:bx2] = alpha * fg_crop[:, :, :3] + (1.0 - alpha) * bg_roi
+    return bg
+
+class Fruit:
+    TYPES = ["red","orange","yellow","green","blue","purple","brown"]
+    def __init__(self, now, bomb_prob=0.12):
         self.x = random.randint(int(0.15*W), int(0.85*W))
         self.y = H + FRUIT_RADIUS + 5
         self.vx = random.uniform(-220, 220)
         self.vy = -random.uniform(700, 1300)
         self.alive = True
         self.born = now
-        self.is_bomb = (random.random() < bomb_prob)
-        self.color = Fruit.BOMB_COLOR if self.is_bomb else random.choice(Fruit.COLORS)
+        if random.random() < bomb_prob:
+            self.key = "bomb"
+            self.is_bomb = True
+        else:
+            self.key = random.choice(Fruit.TYPES)
+            self.is_bomb = False
 
     def update(self, dt):
         if not self.alive: return
@@ -121,6 +196,8 @@ def main():
     last_tip = None
     last_tip_time = None
 
+    bomb_flash_until = 0.0 # will flash red screen if you hit a bomb
+
     while True:
         ok, frame = cap.read()
         if not ok: break
@@ -163,8 +240,6 @@ def main():
             # draw fingertip
             cv2.circle(frame, (x, y), 7, (255, 255, 255), -1)
 
-        bomb_flash_until = 0.0 # will flash red screen if you hit a bomb
-
         if slice_segment:
             x1,y1,x2,y2 = slice_segment
             cv2.line(frame, (x1,y1), (x2,y2), (255,255,255), 2)
@@ -179,16 +254,24 @@ def main():
 
         # draw fruits
         for f in fruits:
-            if not f.alive: continue
-            center = (int(f.x), int(f.y))
-            if getattr(f, "is_bomb", False):
-                cv2.circle(frame, center, FRUIT_RADIUS, (0,0,0), -1)         # black fill
-                cv2.circle(frame, center, FRUIT_RADIUS, (0,0,255), 2)        # red outline
-                # Optional: small "fuse" dot
-                cv2.circle(frame, (center[0], center[1]-8), 4, (0,0,255), -1)
-            else:
-                cv2.circle(frame, center, FRUIT_RADIUS, f.color, -1)         # fruit fill
-                cv2.circle(frame, center, FRUIT_RADIUS, (255,255,255), 2)    # white outline
+            if not f.alive:
+                continue
+
+            img = fruit_imgs.get(f.key, None)
+            if img is None:
+                # fallback: draw a simple circle so game keeps running
+                cv2.circle(frame, (int(f.x), int(f.y)), FRUIT_RADIUS, (0,255,0), -1)
+                continue
+
+            # resize sprite to match fruit size
+            scale = (2 * FRUIT_RADIUS) / img.shape[0]
+            new_w = int(img.shape[1] * scale)
+            new_h = int(img.shape[0] * scale)
+            fg = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+            # overlay PNG with alpha
+            frame = overlay_img(frame, fg, int(f.x), int(f.y))
+
 
         # clean up dead fruits occasionally
         fruits = [f for f in fruits if f.alive or (now - f.born) < 8.0]
@@ -200,8 +283,25 @@ def main():
             frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
 
         # HUD
-        cv2.putText(frame, f"Score: {score}", (16, 36),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,255,255), 2)
+        # resize icon to a fixed height
+        ICON_H = 36
+        scale = ICON_H / hud_icon.shape[0]
+        icon_w = int(hud_icon.shape[1] * scale)
+        icon_h = int(hud_icon.shape[0] * scale)
+        icon_resized = cv2.resize(hud_icon, (icon_w, icon_h), interpolation=cv2.INTER_AREA)
+
+        MARGIN = 12
+        # draw icon top-left
+        frame = overlay_img(frame, icon_resized, MARGIN + icon_w // 2, MARGIN + icon_h // 2)
+
+        # draw the numeric score to the right of the icon
+        text = f"{score}"
+        tx = MARGIN + icon_w + 8
+        ty = MARGIN + icon_h - 6
+
+        # shadow + white for readability
+        cv2.putText(frame, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 215, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, "Press 'q' to quit", (16, H-16),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 1)
 
