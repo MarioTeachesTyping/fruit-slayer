@@ -7,6 +7,7 @@ import cv2
 import mediapipe as mp
 import time, random, math
 import numpy as np
+import sys
 
 W, H = 960, 540
 GRAVITY = 1200.0  # px/s^2
@@ -33,6 +34,27 @@ def load_png(name):
         alpha = 255 * np.ones((img.shape[0], img.shape[1], 1), dtype=img.dtype)
         img = np.concatenate([img, alpha], axis=2)
     return img
+
+def play_slice_sfx():
+    if sys.platform.startswith("win"):
+        import winsound
+        winsound.PlaySound(
+            os.path.join(ASSET_DIR, "slice.wav"),
+            winsound.SND_FILENAME | winsound.SND_ASYNC  # non-blocking
+        )
+    else:
+        # No-op on non-Windows (or print a warning)
+        pass
+
+def play_explosion_sfx():
+    if sys.platform.startswith("win"):
+        import winsound
+        winsound.PlaySound(
+            os.path.join(ASSET_DIR, "explosion.wav"),
+            winsound.SND_FILENAME | winsound.SND_ASYNC
+        )
+    else:
+        pass
 
 # Load them in beforehand
 fruit_imgs = {
@@ -210,7 +232,9 @@ def main():
 
         # spawn fruits
         if now - last_spawn > SPAWN_EVERY and sum(f.alive for f in fruits) < MAX_FRUITS:
-            fruits.append(Fruit(now))
+            # bomb chance grows with score, but caps out
+            bomb_prob = 0.1 + min(0.3, score * 0.01)  # 10% base, up to 40% max
+            fruits.append(Fruit(now, bomb_prob=bomb_prob))
             last_spawn = now
 
         # update fruits
@@ -247,10 +271,12 @@ def main():
                 if f.alive and seg_circle_intersects(x1,y1,x2,y2, int(f.x), int(f.y), FRUIT_RADIUS):
                     f.alive = False
                     if getattr(f, "is_bomb", False):
-                        score = max(0, score - 2)        # simple penalty; tweak as you like
-                        bomb_flash_until = now + 0.20     # 200 ms red flash
+                        score = max(0, score - 5)
+                        bomb_flash_until = now + 0.20
+                        play_explosion_sfx()   # <-- play bomb sound here
                     else:
                         score += 1
+                        play_slice_sfx()       # <-- slice sound
 
         # draw fruits
         for f in fruits:
