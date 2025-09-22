@@ -8,6 +8,8 @@ import mediapipe as mp
 import time, random, math
 import numpy as np
 import sys
+from flask import Flask, Response
+import threading
 
 W, H = 960, 540
 GRAVITY = 1200.0  # px/s^2
@@ -19,6 +21,24 @@ MULT_DURATION = 5.0  # seconds of 2x multiplier
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET_DIR = os.path.join(HERE, "assets")
+
+latest_jpg = None
+app = Flask(__name__)
+
+def mjpeg_generator():
+    global latest_jpg
+    while True:
+        if latest_jpg is None:
+            time.sleep(0.01)
+            continue
+        yield (b"--frame\r\n"
+               b"Content-Type: image/jpeg\r\n\r\n" +
+               latest_jpg + b"\r\n")
+
+@app.route("/stream")
+def stream():
+    return Response(mjpeg_generator(),
+                    mimetype="multipart/x-mixed-replace; boundary=frame")
 
 def load_png(name):
     """Load a PNG with alpha, raise clear error if missing, and ensure 4 channels."""
@@ -284,7 +304,7 @@ def main():
                         if f.key == "blue":
                             # stacking: extend by 5s if already active, otherwise set for 5s
                             score_mult_until = max(score_mult_until, now) + MULT_DURATION
-                            play_slice_sfx()
+                            # play_slice_sfx()
 
                         # compute multiplier AFTER possibly updating the timer
                         mult = 2 if now < score_mult_until else 1
@@ -359,12 +379,23 @@ def main():
         cv2.putText(frame, "Press 'q' to quit", (16, H-16),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 1)
 
-        cv2.imshow("Fruit Slayer (Backend)", frame)
+        ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if ret:
+            latest_jpg = buf.tobytes()
+
+        cv2.imshow("Fruit Slayer", frame)
+
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
     cap.release()
     cv2.destroyAllWindows()
+    os._exit(0)  # hard-exit so Flask stops too
+
+def run_game():
+    main()
 
 if __name__ == "__main__":
-    main()
+    t = threading.Thread(target=run_game, daemon=True)
+    t.start()
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
