@@ -15,6 +15,7 @@ SPAWN_EVERY = 0.9  # seconds
 SLICE_SPEED_THRESH = 1400.0  # px/s (tweak)
 FRUIT_RADIUS = 28
 MAX_FRUITS = 6
+MULT_DURATION = 5.0  # seconds of 2x multiplier
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET_DIR = os.path.join(HERE, "assets")
@@ -219,6 +220,7 @@ def main():
     last_tip_time = None
 
     bomb_flash_until = 0.0 # will flash red screen if you hit a bomb
+    score_mult_until = 0.0  # time until which 2x is active
 
     while True:
         ok, frame = cap.read()
@@ -273,10 +275,22 @@ def main():
                     if getattr(f, "is_bomb", False):
                         score = max(0, score - 5)
                         bomb_flash_until = now + 0.20
-                        play_explosion_sfx()   # <-- play bomb sound here
+                        play_explosion_sfx()
                     else:
-                        score += 1
-                        play_slice_sfx()       # <-- slice sound
+                        # base points for a fruit
+                        base = 1
+
+                        # if it's the 2x banana, activate/extend multiplier
+                        if f.key == "blue":
+                            # stacking: extend by 5s if already active, otherwise set for 5s
+                            score_mult_until = max(score_mult_until, now) + MULT_DURATION
+                            play_slice_sfx()
+
+                        # compute multiplier AFTER possibly updating the timer
+                        mult = 2 if now < score_mult_until else 1
+                        score += base * mult
+                        play_slice_sfx()
+
 
         # draw fruits
         for f in fruits:
@@ -328,6 +342,20 @@ def main():
         # shadow + white for readability
         cv2.putText(frame, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 3, cv2.LINE_AA)
         cv2.putText(frame, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 215, 255), 2, cv2.LINE_AA)
+
+        # show x2 badge while multiplier is active
+        remaining = score_mult_until - now
+        if remaining > 0:
+            badge_text = f"x2"
+            # place it a bit to the right of the score
+            bx = tx + 60
+            by = ty
+            # subtle glow/outline
+            cv2.putText(frame, badge_text, (bx, by), cv2.FONT_HERSHEY_SIMPLEX, 1.0,
+                        (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, badge_text, (bx, by), cv2.FONT_HERSHEY_SIMPLEX, 1.0,
+                        (0, 215, 255), 2, cv2.LINE_AA)  # gold/yellow
+
         cv2.putText(frame, "Press 'q' to quit", (16, H-16),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200,200,200), 1)
 
